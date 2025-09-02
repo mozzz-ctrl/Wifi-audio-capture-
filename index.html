@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Auto Start WebRTC Audio Streamer</title>
+</head>
+<body>
+  <h2>Auto Start WebRTC Audio Streamer (Send or Receive)</h2>
+
+  <label>
+    <input type="radio" name="role" value="sender" /> Sender (Stream mic)
+  </label>
+  <label>
+    <input type="radio" name="role" value="receiver" checked /> Receiver (Play audio)
+  </label>
+  <br /><br />
+
+  <button id="startBtn">Start</button>
+  <button id="stopBtn" disabled>Stop</button>
+
+  <br /><br />
+  <audio id="remoteAudio" autoplay controls></audio>
+
+  <script>
+    let pc;
+    let localStream;
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const audioElement = document.getElementById('remoteAudio');
+
+    // Replace with your signaling server URL
+    const signalingSocket = new WebSocket('ws://your-signaling-server');
+
+    // Role selector
+    let role = document.querySelector('input[name="role"]:checked').value;
+    const radios = document.querySelectorAll('input[name="role"]');
+    radios.forEach(radio => {
+      radio.addEventListener('change', () => {
+        role = document.querySelector('input[name="role"]:checked').value;
+      });
+    });
+
+    signalingSocket.onopen = () => {
+      console.log('WebSocket connected');
+      if(role === 'sender') {
+        startStreaming();
+      }
+    };
+
+    signalingSocket.onmessage = async (event) => {
+      const message = JSON.parse(event.data);
+      if (role === 'receiver') {
+        if (message.type === 'offer') {
+          if (!pc) {
+            startReceiving();
+          }
+          await pc.setRemoteDescription(new RTCSessionDescription(message.offer));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          signalingSocket.send(JSON.stringify({ type: 'answer', answer: answer }));
+        } else if (message.type === 'candidate') {
+          await pc.addIceCandidate(message.candidate);
+        }
+      } else if (role === 'sender') {
+        if (message.type === 'answer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(message.answer));
+        } else if (message.type === 'candidate') {
+          await pc.addIceCandidate(message.candidate);
+        }
+      }
+    };
+
+    async function startStreaming() {
+      pc = new RTCPeerConnection();
+
+      pc.onicecandidate = (event) => {
+        if(event.candidate) {
+          signalingSocket.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
+        }
+      };
+
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: { noiseSuppression: true } });
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      signalingSocket.send(JSON.stringify({ type: 'offer', offer: offer }));
+
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+    }
+
+    function startReceiving() {
+      pc = new RTCPeerConnection();
+
+      pc.onicecandidate = (event) => {
+        if(event.candidate) {
+          signalingSocket.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
+        }
+      };
+
+      pc.ontrack = (event) => {
+        audioElement.srcObject = event.streams[0];
+      };
+
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+    }
+
+    startBtn.onclick = () => {
+      if(role === 'sender') {
+        startStreaming();
+      } else if(role === 'receiver') {
+        startReceiving();
+      }
+    };
+
+    stopBtn.onclick = () => {
+      if(localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+      }
+      if(pc) {
+        pc.close();
+      }
+      audioElement.srcObject = null;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    };
+  </script>
+</body>
+</html>
