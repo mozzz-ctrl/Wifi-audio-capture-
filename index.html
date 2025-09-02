@@ -1,132 +1,82 @@
-<!DOCTYPE html>
+ <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Auto Start WebRTC Audio Streamer</title>
+  <title>WebRTC Live Audio Stream</title>
 </head>
 <body>
-  <h2>Auto Start WebRTC Audio Streamer (Send or Receive)</h2>
+  <h2>WebRTC Live Audio Streaming (Sender & Receiver)</h2>
 
-  <label>
-    <input type="radio" name="role" value="sender" /> Sender (Stream mic)
-  </label>
-  <label>
-    <input type="radio" name="role" value="receiver" checked /> Receiver (Play audio)
-  </label>
-  <br /><br />
+  <button id="startCapture">Start Capturing Microphone</button>
+  <button id="createOffer" disabled>Create Offer</button>
 
-  <button id="startBtn">Start</button>
-  <button id="stopBtn" disabled>Stop</button>
+  <h3>Local SDP Offer</h3>
+  <textarea id="localOffer" rows="6" cols="50" placeholder="Offer will appear here"></textarea>
 
-  <br /><br />
-  <audio id="remoteAudio" autoplay controls></audio>
+  <h3>Remote SDP Answer</h3>
+  <textarea id="remoteAnswer" rows="6" cols="50" placeholder="Paste remote answer here"></textarea>
+  <button id="setRemoteAnswer">Set Remote Answer</button>
+
+  <h3>Remote SDP Offer</h3>
+  <textarea id="remoteOffer" rows="6" cols="50" placeholder="Paste remote offer here"></textarea>
+  <button id="setRemoteOffer">Set Remote Offer</button>
+
+  <h3>Local SDP Answer</h3>
+  <textarea id="localAnswer" rows="6" cols="50" placeholder="Local answer will appear here"></textarea>
+
+  <h3>Remote Audio</h3>
+  <audio id="remoteAudio" controls autoplay></audio>
 
   <script>
-    let pc;
+    let pc = new RTCPeerConnection();
     let localStream;
-    const startBtn = document.getElementById('startBtn');
-    const stopBtn = document.getElementById('stopBtn');
-    const audioElement = document.getElementById('remoteAudio');
 
-    // Replace with your signaling server URL
-    const signalingSocket = new WebSocket('ws://your-signaling-server');
+    const startCaptureButton = document.getElementById('startCapture');
+    const createOfferButton = document.getElementById('createOffer');
+    const localOfferText = document.getElementById('localOffer');
+    const remoteAnswerText = document.getElementById('remoteAnswer');
+    const setRemoteAnswerButton = document.getElementById('setRemoteAnswer');
+    const remoteOfferText = document.getElementById('remoteOffer');
+    const setRemoteOfferButton = document.getElementById('setRemoteOffer');
+    const localAnswerText = document.getElementById('localAnswer');
+    const remoteAudio = document.getElementById('remoteAudio');
 
-    // Role selector
-    let role = document.querySelector('input[name="role"]:checked').value;
-    const radios = document.querySelectorAll('input[name="role"]');
-    radios.forEach(radio => {
-      radio.addEventListener('change', () => {
-        role = document.querySelector('input[name="role"]:checked').value;
-      });
-    });
-
-    signalingSocket.onopen = () => {
-      console.log('WebSocket connected');
-      if(role === 'sender') {
-        startStreaming();
-      }
+    // Handle remote tracks (incoming audio)
+    pc.ontrack = event => {
+      remoteAudio.srcObject = event.streams[0];
     };
 
-    signalingSocket.onmessage = async (event) => {
-      const message = JSON.parse(event.data);
-      if (role === 'receiver') {
-        if (message.type === 'offer') {
-          if (!pc) {
-            startReceiving();
-          }
-          await pc.setRemoteDescription(new RTCSessionDescription(message.offer));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          signalingSocket.send(JSON.stringify({ type: 'answer', answer: answer }));
-        } else if (message.type === 'candidate') {
-          await pc.addIceCandidate(message.candidate);
-        }
-      } else if (role === 'sender') {
-        if (message.type === 'answer') {
-          await pc.setRemoteDescription(new RTCSessionDescription(message.answer));
-        } else if (message.type === 'candidate') {
-          await pc.addIceCandidate(message.candidate);
-        }
-      }
-    };
-
-    async function startStreaming() {
-      pc = new RTCPeerConnection();
-
-      pc.onicecandidate = (event) => {
-        if(event.candidate) {
-          signalingSocket.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
-        }
-      };
-
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: { noiseSuppression: true } });
+    // Capture microphone audio
+    startCaptureButton.onclick = async () => {
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      alert('Microphone stream started and added to WebRTC connection');
+      createOfferButton.disabled = false;
+    };
 
+    // Create an SDP offer (Sender role)
+    createOfferButton.onclick = async () => {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-
-      signalingSocket.send(JSON.stringify({ type: 'offer', offer: offer }));
-
-      startBtn.disabled = true;
-      stopBtn.disabled = false;
-    }
-
-    function startReceiving() {
-      pc = new RTCPeerConnection();
-
-      pc.onicecandidate = (event) => {
-        if(event.candidate) {
-          signalingSocket.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
-        }
-      };
-
-      pc.ontrack = (event) => {
-        audioElement.srcObject = event.streams[0];
-      };
-
-      startBtn.disabled = true;
-      stopBtn.disabled = false;
-    }
-
-    startBtn.onclick = () => {
-      if(role === 'sender') {
-        startStreaming();
-      } else if(role === 'receiver') {
-        startReceiving();
-      }
+      localOfferText.value = JSON.stringify(offer);
     };
 
-    stopBtn.onclick = () => {
-      if(localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-      }
-      if(pc) {
-        pc.close();
-      }
-      audioElement.srcObject = null;
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
+    // Set remote SDP answer (Sender waits for this)
+    setRemoteAnswerButton.onclick = async () => {
+      const answer = JSON.parse(remoteAnswerText.value);
+      await pc.setRemoteDescription(answer);
+      alert('Remote answer set, connection should be established');
+    };
+
+    // Set remote offer (Receiver role)
+    setRemoteOfferButton.onclick = async () => {
+      const offer = JSON.parse(remoteOfferText.value);
+      await pc.setRemoteDescription(offer);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      localAnswerText.value = JSON.stringify(answer);
+      alert('Local answer created, send this back to remote sender');
     };
   </script>
 </body>
